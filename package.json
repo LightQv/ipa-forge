@@ -20,13 +20,13 @@
     "altstore",
     "sideload"
   ],
-  "homepage": "https://github.com/vivianquerenet/ipa-forge#readme",
+  "homepage": "https://github.com/LightQv/ipa-forge#readme",
   "bugs": {
-    "url": "https://github.com/vivianquerenet/ipa-forge/issues"
+    "url": "https://github.com/LightQv/ipa-forge/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/vivianquerenet/ipa-forge.git"
+    "url": "git+https://github.com/LightQv/ipa-forge.git"
   },
   "engines": {
     "node": ">=18"

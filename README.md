@@ -67,12 +67,3 @@ configuration: Release
 derived data: {input}/ios/build
 output:       ~/Downloads/Payload.ipa
 ```
-
-## Publishing
-
-```bash
-npm login
-npm publish
-```
-
-Before publishing, make sure `package.json` points to the correct GitHub repository.
