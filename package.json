@@ -1,0 +1,41 @@
+{
+  "name": "ipa-forge",
+  "version": "0.1.0",
+  "description": "Build unsigned iOS apps and package them as IPA files for sideloading.",
+  "bin": {
+    "ipa-forge": "./bin/ipa-forge"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "ipa",
+    "ios",
+    "xcode",
+    "xcodebuild",
+    "expo",
+    "react-native",
+    "altstore",
+    "sideload"
+  ],
+  "homepage": "https://github.com/vivianquerenet/ipa-forge#readme",
+  "bugs": {
+    "url": "https://github.com/vivianquerenet/ipa-forge/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vivianquerenet/ipa-forge.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,320 @@
+#!/usr/bin/env bash
+set -e
+
+APP_NAME=""
+INVOCATION_DIR="$(pwd -P)"
+INPUT_DIR="$(pwd)"
+OUTPUT_PATH="$HOME/Downloads/Payload.ipa"
+SCHEME=""
+WORKSPACE=""
+CONFIGURATION="Release"
+DERIVED_DATA_PATH=""
+
+usage() {
+  cat <<'EOF'
+Build an unsigned iOS app and package it as an IPA.
+
+Usage:
+  ipa-forge --name=AppName [options]
+
+Required:
+  --name=AppName              App name. Also used as the default scheme and workspace name.
+
+Options:
+  --input=/path/to/project    Project root to build from. Defaults to the current directory.
+  --output=/path/to/file.ipa  Final IPA path. Defaults to ~/Downloads/Payload.ipa.
+  --scheme=AppName            Xcode scheme. Defaults to --name.
+  --workspace=path            Xcode workspace. Defaults to ios/{name}.xcworkspace.
+  --configuration=Release     Xcode build configuration. Defaults to Release.
+  --derived-data=path         Derived data path. Defaults to {input}/ios/build.
+  --help                      Show this help message.
+
+Examples:
+  ipa-forge --name=Scenario
+  ipa-forge --name=Scenario --input=/path/to/scenario_expo
+  ipa-forge --name=Scenario --input=/path/to/scenario_expo --output=~/Downloads/Scenario.ipa
+EOF
+}
+
+expand_path() {
+  local path="$1"
+
+  case "$path" in
+    ~) printf "%s" "$HOME" ;;
+    ~/*) printf "%s/%s" "$HOME" "${path#~/}" ;;
+    *) printf "%s" "$path" ;;
+  esac
+}
+
+resolve_from_input() {
+  local path
+  path=$(expand_path "$1")
+
+  case "$path" in
+    /*) printf "%s" "$path" ;;
+    *) printf "%s/%s" "$INPUT_DIR" "$path" ;;
+  esac
+}
+
+require_value() {
+  local flag="$1"
+  local value="$2"
+
+  if [ -z "$value" ]; then
+    echo "Error: missing value for $flag"
+    exit 1
+  fi
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --name=*)
+      APP_NAME="${1#*=}"
+      ;;
+    --name)
+      require_value "$1" "${2:-}"
+      APP_NAME="$2"
+      shift
+      ;;
+    --input=*)
+      INPUT_DIR="${1#*=}"
+      ;;
+    --input)
+      require_value "$1" "${2:-}"
+      INPUT_DIR="$2"
+      shift
+      ;;
+    --output=*)
+      OUTPUT_PATH="${1#*=}"
+      ;;
+    --output)
+      require_value "$1" "${2:-}"
+      OUTPUT_PATH="$2"
+      shift
+      ;;
+    --scheme=*)
+      SCHEME="${1#*=}"
+      ;;
+    --scheme)
+      require_value "$1" "${2:-}"
+      SCHEME="$2"
+      shift
+      ;;
+    --workspace=*)
+      WORKSPACE="${1#*=}"
+      ;;
+    --workspace)
+      require_value "$1" "${2:-}"
+      WORKSPACE="$2"
+      shift
+      ;;
+    --configuration=*)
+      CONFIGURATION="${1#*=}"
+      ;;
+    --configuration)
+      require_value "$1" "${2:-}"
+      CONFIGURATION="$2"
+      shift
+      ;;
+    --derived-data=*)
+      DERIVED_DATA_PATH="${1#*=}"
+      ;;
+    --derived-data)
+      require_value "$1" "${2:-}"
+      DERIVED_DATA_PATH="$2"
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Error: unknown flag $1"
+      echo
+      usage
+      exit 1
+      ;;
+  esac
+
+  shift
+done
+
+if [ -z "$APP_NAME" ]; then
+  echo "Error: missing required flag --name=AppName"
+  echo
+  usage
+  exit 1
+fi
+
+INPUT_DIR=$(expand_path "$INPUT_DIR")
+if [ ! -d "$INPUT_DIR" ]; then
+  echo "Error: input directory does not exist: $INPUT_DIR"
+  exit 1
+fi
+
+INPUT_DIR=$(cd "$INPUT_DIR" && pwd -P)
+OUTPUT_PATH=$(expand_path "$OUTPUT_PATH")
+case "$OUTPUT_PATH" in
+  /*) ;;
+  *) OUTPUT_PATH="$INVOCATION_DIR/$OUTPUT_PATH" ;;
+esac
+
+if [ -z "$SCHEME" ]; then
+  SCHEME="$APP_NAME"
+fi
+
+if [ -z "$WORKSPACE" ]; then
+  WORKSPACE="ios/$APP_NAME.xcworkspace"
+fi
+
+if [ -z "$DERIVED_DATA_PATH" ]; then
+  DERIVED_DATA_PATH="$INPUT_DIR/ios/build"
+else
+  DERIVED_DATA_PATH=$(resolve_from_input "$DERIVED_DATA_PATH")
+fi
+
+WORKSPACE_PATH=$(resolve_from_input "$WORKSPACE")
+APP_PATH="$DERIVED_DATA_PATH/Build/Products/Release-iphoneos/$APP_NAME.app"
+OUTPUT_DIR=$(dirname "$OUTPUT_PATH")
+LOG_FILE=$(mktemp "/tmp/${APP_NAME}-xcodebuild.XXXXXX.log")
+STAGING_DIR=""
+
+cleanup() {
+  rm -f "$LOG_FILE"
+  if [ -n "$STAGING_DIR" ]; then
+    rm -rf "$STAGING_DIR"
+  fi
+}
+
+trap cleanup EXIT
+
+if [ ! -d "$INPUT_DIR/ios" ]; then
+  echo "Error: ios directory not found in input directory: $INPUT_DIR"
+  exit 1
+fi
+
+if [ ! -d "$WORKSPACE_PATH" ]; then
+  echo "Error: workspace not found: $WORKSPACE_PATH"
+  exit 1
+fi
+
+if [ ! -d "$OUTPUT_DIR" ]; then
+  echo "Error: output directory does not exist: $OUTPUT_DIR"
+  exit 1
+fi
+
+draw_progress() {
+  local percent=$1
+  local label="$2"
+  local width=30
+  local filled=$((percent * width / 100))
+  local empty=$((width - filled))
+  local i
+
+  printf "\r\033[K%s [" "$label"
+  for ((i = 0; i < filled; i++)); do printf "█"; done
+  for ((i = 0; i < empty; i++)); do printf "░"; done
+  printf "] %3d%%" "$percent"
+}
+
+latest_log_line() {
+  awk 'NF { line=$0 } END { print line }' "$LOG_FILE"
+}
+
+truncate_log_line() {
+  local line="$1"
+  local columns
+  local max_length
+
+  columns=$(tput cols 2>/dev/null || printf "120")
+  max_length=$((columns - 2))
+
+  if [ "$max_length" -lt 20 ]; then
+    max_length=20
+  fi
+
+  printf "%.*s" "$max_length" "$line"
+}
+
+draw_progress_with_log() {
+  local percent=$1
+  local label="$2"
+  local log_line
+
+  log_line=$(latest_log_line)
+
+  printf "\033[2A\r\033[K"
+  draw_progress "$percent" "$label"
+  printf "\n\033[K"
+
+  if [ -n "$log_line" ]; then
+    printf "  %s" "$(truncate_log_line "$log_line")"
+  else
+    printf "  Waiting for build output..."
+  fi
+
+  printf "\n"
+}
+
+run_with_fake_progress() {
+  local label="$1"
+  local max_percent="$2"
+  shift 2
+
+  local percent=0
+
+  "$@" > "$LOG_FILE" 2>&1 &
+  local pid=$!
+
+  printf "\n\n"
+
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$percent" -lt "$max_percent" ]; then
+      percent=$((percent + 1))
+    fi
+
+    draw_progress_with_log "$percent" "$label"
+    sleep 0.5
+  done
+
+  if wait "$pid"; then
+    draw_progress_with_log "$max_percent" "$label"
+  else
+    local status=$?
+    printf "\n\nBuild failed. Last Xcode output:\n\n"
+    tail -n 80 "$LOG_FILE"
+    exit "$status"
+  fi
+}
+
+cd "$INPUT_DIR"
+
+run_with_fake_progress "[1/3] Building unsigned iOS app " 85 \
+  xcodebuild -workspace "$WORKSPACE_PATH" \
+  -scheme "$SCHEME" \
+  -configuration "$CONFIGURATION" \
+  -sdk iphoneos \
+  -derivedDataPath "$DERIVED_DATA_PATH" \
+  CODE_SIGNING_ALLOWED=NO \
+  CODE_SIGNING_REQUIRED=NO \
+  CODE_SIGN_IDENTITY="" \
+  build
+
+draw_progress 90 "[2/3] Locating built app        "
+printf "\n"
+
+if [ ! -d "$APP_PATH" ]; then
+  echo "Error: app not found at $APP_PATH"
+  exit 1
+fi
+
+draw_progress 95 "[3/3] Packaging IPA            "
+STAGING_DIR=$(mktemp -d "/tmp/${APP_NAME}-ipa.XXXXXX")
+mkdir -p "$STAGING_DIR/Payload"
+rm -f "$OUTPUT_PATH"
+cp -R "$APP_PATH" "$STAGING_DIR/Payload"
+(cd "$STAGING_DIR" && zip -qr "$OUTPUT_PATH" Payload)
+draw_progress 100 "[3/3] Packaging IPA            "
+printf "\n"
+
+echo "✓ IPA created at: $OUTPUT_PATH"
